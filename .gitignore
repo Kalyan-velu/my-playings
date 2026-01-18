@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-client_secret_*
+client_secret*
 # Test binary, built with `go test -c`
 *.test
 
