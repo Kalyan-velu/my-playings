@@ -1,4 +1,4 @@
-package youtube_playlists
+package youtube
 
 import (
 	"context"
@@ -10,16 +10,16 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	g "google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
 
-type YoutubeService struct {
+type Service struct {
 	Config *oauth2.Config
 }
 
-// NewYoutubeService creates a new YoutubeService from the client secret file
-func NewYoutubeService(clientSecretDir string) (*YoutubeService, error) {
+func NewService(clientSecretDir string) (*Service, error) {
 	files, err := os.ReadDir(clientSecretDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
@@ -42,15 +42,15 @@ func NewYoutubeService(clientSecretDir string) (*YoutubeService, error) {
 		return nil, fmt.Errorf("unable to read client secret file: %w", err)
 	}
 
-	config, err := google.ConfigFromJSON(data, youtube.YoutubeReadonlyScope)
+	config, err := google.ConfigFromJSON(data, youtube.YoutubeReadonlyScope, g.UserinfoEmailScope, g.UserinfoProfileScope)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse client secret file to config: %w", err)
 	}
 
-	return &YoutubeService{Config: config}, nil
+	return &Service{Config: config}, nil
 }
 
-func (s *YoutubeService) GetMyPlayLists(ctx context.Context, token *oauth2.Token) ([]*youtube.Playlist, error) {
+func (s *Service) GetMyPlayLists(ctx context.Context, token *oauth2.Token) ([]*youtube.Playlist, error) {
 	httpClient := s.Config.Client(ctx, token)
 	service, err := youtube.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *YoutubeService) GetMyPlayLists(ctx context.Context, token *oauth2.Token
 	return allPlaylists, nil
 }
 
-func (s *YoutubeService) SaveToken(path string, token *oauth2.Token) error {
+func (s *Service) SaveToken(path string, token *oauth2.Token) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("unable to cache oauth token: %v", err)
@@ -83,7 +83,10 @@ func (s *YoutubeService) SaveToken(path string, token *oauth2.Token) error {
 	return json.NewEncoder(f).Encode(token)
 }
 
-func (s *YoutubeService) LoadToken(path string) (*oauth2.Token, error) {
+func (s *Service) LoadToken(path string) (*oauth2.Token, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

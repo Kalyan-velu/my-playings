@@ -2,15 +2,15 @@
 
 root = "."
 testdata_dir = "testdata"
-tmp_dir = "tmp"
+tmp_dir = "bin"
 
 [build]
   args_bin = []
-  bin = "tmp\\main.exe"
-  cmd = "go build -o ./tmp/main.exe ."
+  bin = "bin\\main.exe"
+  cmd = "go build -C cmd/server -o ./bin/main.exe ."
   delay = 1000
-  entrypoint = ["tmp\\main.exe"]
-  exclude_dir = ["assets", "tmp", "vendor", "testdata"]
+  entrypoint = ["bin\\main.exe"]
+  exclude_dir = ["assets", "tmp", "vendor", "testdata",".idea",".git",".output.txt"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false
@@ -52,5 +52,5 @@ tmp_dir = "tmp"
   proxy_port = 0
 
 [screen]
-  clear_on_rebuild = false
+  clear_on_rebuild = true
   keep_scroll = true

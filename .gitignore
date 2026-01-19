@@ -7,7 +7,7 @@
 client_secret*
 # Test binary, built with `go test -c`
 *.test
-
+.env
 # Output of the go coverage tool
 *.out
 
@@ -23,4 +23,9 @@ pkg/
 .idea/
 
 # OAuth tokens
-token.json
+token_youtube.json
+token_spotify.json
+.output.txt
+
+# Output of the server
+output.log
