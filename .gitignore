@@ -21,3 +21,6 @@ pkg/
 
 # IDE - GoLand
 .idea/
+
+# OAuth tokens
+token.json

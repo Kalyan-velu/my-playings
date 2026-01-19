@@ -1,107 +1,116 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	playlists "my-playings/google"
 	"net/http"
 	"os"
+	"sync"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/youtube/v3"
 )
 
-var (
-	googleOauthConfig *oauth2.Config
-	// TODO: Use a secure way to store tokens in production
-	token *oauth2.Token
-)
-
-func init() {
-	// Dynamically find the client secret file
-	files, err := os.ReadDir(".")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var clientSecretFile string
-	for _, file := range files {
-		if !file.IsDir() && len(file.Name()) > 13 && file.Name()[:13] == "client_secret" {
-			clientSecretFile = file.Name()
-			break
-		}
-	}
-
-	if clientSecretFile == "" {
-		log.Fatal("lient_secret.jsonc file not found")
-	}
-
-	data, err := os.ReadFile(clientSecretFile)
-	if err != nil {
-		log.Fatalf("Unable to read client secret file: %v", err)
-	}
-
-	config, err := google.ConfigFromJSON(data, youtube.YoutubeReadonlyScope)
-	if err != nil {
-		log.Fatalf("Unable to parse client secret file to config: %v", err)
-	}
-	// Google's default redirect URI for web apps might need to be configured in console
-	// For local testing, ensure it matches what's in the console (usually http://localhost:8080/callback)
-	googleOauthConfig = config
+type Server struct {
+	youtubeService *playlists.YoutubeService
+	token          *oauth2.Token
+	tokenFile      string
+	mu             sync.RWMutex // For thread-safe token access
 }
 
 func main() {
+	ytService, err := playlists.NewYoutubeService(".")
+	if err != nil {
+		log.Fatalf("Failed to initialize YouTube service: %v", err)
+	}
+
+	tokenFile := "token.json"
+	initialToken, err := ytService.LoadToken(tokenFile)
+	if err != nil {
+		log.Printf("No existing token found or failed to load: %v", err)
+	}
+
+	s := &Server{
+		youtubeService: ytService,
+		token:          initialToken,
+		tokenFile:      tokenFile,
+	}
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleMain)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/callback", s.handleCallback)
+	mux.HandleFunc("/playlists", s.handlePlaylists)
 
-	mux.HandleFunc("/", handleMain)
-	mux.HandleFunc("/login", handleLogin)
-	mux.HandleFunc("/callback", handleCallback)
-	mux.HandleFunc("/playlists", handlePlaylists)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-	fmt.Println("Server started at http://localhost:8080")
-	err := http.ListenAndServe(":8080", mux)
+	fmt.Printf("Server started at http://localhost:%s\n", port)
+	err = http.ListenAndServe(":"+port, mux)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func handleMain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleMain(w http.ResponseWriter, r *http.Request) {
 	var html = `<html><body><a href="/login">Google LogIn</a></body></html>`
 	fmt.Fprint(w, html)
 }
 
-func handleLogin(w http.ResponseWriter, r *http.Request) {
-	url := googleOauthConfig.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// In production, use a secure, random state token and verify it in the callback
+	state := "random-state-token"
+	url := s.youtubeService.Config.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
-func handleCallback(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
-	t, err := googleOauthConfig.Exchange(context.Background(), code)
+	t, err := s.youtubeService.Config.Exchange(r.Context(), code)
 	if err != nil {
 		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	token = t
+
+	s.mu.Lock()
+	s.token = t
+	s.mu.Unlock()
+
+	err = s.youtubeService.SaveToken(s.tokenFile, t)
+	if err != nil {
+		log.Printf("Warning: failed to save token: %v", err)
+	}
+
 	http.Redirect(w, r, "/playlists", http.StatusTemporaryRedirect)
 }
 
-func handlePlaylists(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	token := s.token
+	s.mu.RUnlock()
+
 	if token == nil {
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
 
-	client := googleOauthConfig.Client(context.Background(), token)
-	items, err := playlists.GetMyPlayLists(context.Background(), client)
+	items, err := s.youtubeService.GetMyPlayLists(r.Context(), token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// The token might have been refreshed. oauth2.Config.Client returns a client
+	// that handles refreshing. We should check if the token changed and save it.
+	// However, the standard oauth2 library's TokenSource doesn't easily expose if it refreshed
+	// unless we use a custom TokenSource with a notify function.
+	// For now, simple implementation is enough as requested.
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(items)
+	if err := json.NewEncoder(w).Encode(items); err != nil {
+		log.Printf("Error encoding playlists: %v", err)
+	}
 }
