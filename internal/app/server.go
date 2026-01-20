@@ -8,9 +8,11 @@ import (
 	"my-playings/internal/config"
 	"my-playings/internal/provider/spotify"
 	"my-playings/internal/provider/youtube"
+	"my-playings/internal/token"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/markbates/goth"
 	"golang.org/x/oauth2"
@@ -27,22 +29,14 @@ type Server struct {
 }
 
 func NewServer(cfg *config.Config, auth *auth.Auth, yt *youtube.Service, sp *spotify.Service) *Server {
-	var ytToken *oauth2.Token
-	if yt != nil {
-		var err error
-		ytToken, err = yt.LoadToken(cfg.YoutubeTokenFile)
-		if err != nil {
-			log.Printf("No existing YouTube token found or failed to load: %v", err)
-		}
+	ytToken, err := token.LoadToken(cfg.YoutubeTokenFile)
+	if err != nil {
+		log.Printf("No existing YouTube token found or failed to load: %v", err)
 	}
 
-	var spToken *oauth2.Token
-	if sp != nil {
-		var err error
-		spToken, err = sp.LoadToken(cfg.SpotifyTokenFile)
-		if err != nil {
-			log.Printf("No existing Spotify token found or failed to load: %v", err)
-		}
+	spToken, err := token.LoadToken(cfg.SpotifyTokenFile)
+	if err != nil {
+		log.Printf("No existing Spotify token found or failed to load: %v", err)
 	}
 
 	return &Server{
@@ -53,6 +47,20 @@ func NewServer(cfg *config.Config, auth *auth.Auth, yt *youtube.Service, sp *spo
 		ytToken:        ytToken,
 		spToken:        spToken,
 	}
+}
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// before
+		log.Println("→", r.Method, r.URL.Path)
+
+		next.ServeHTTP(w, r) // pass control forward
+
+		// after
+		log.Println("←", time.Since(start))
+	})
 }
 
 func (s *Server) Routes() http.Handler {
@@ -68,16 +76,17 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("/youtube/playlists", s.handleYoutubePlaylists)
 	mux.HandleFunc("/spotify/playlists", s.handleSpotifyPlaylists)
-	return mux
+
+	return LoggingMiddleware(mux)
 }
 
 func (s *Server) handleMain(w http.ResponseWriter, r *http.Request) {
 	var html = `<html><body>
 		<p><a href="/auth/google">LogIn with Google (YouTube)</a></p>
 		<p><a href="/auth/spotify">LogIn with Spotify</a></p>
-		//<hr>
-		//<p><a href="/youtube/playlists">View YouTube Playlists</a></p>
-		//<p><a href="/spotify/playlists">View Spotify Playlists</a></p>
+		<hr>
+		<p><a href="/youtube/playlists">View YouTube Playlists</a></p>
+		<p><a href="/spotify/playlists">View Spotify Playlists</a></p>
 	</body></html>`
 	fmt.Fprint(w, html)
 }
@@ -108,28 +117,10 @@ func (s *Server) handleGothCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.auth.CompleteAuth(w, r, provider)
 	if err != nil {
-		// If user fetching fails (e.g. 401 on identity info), we might still have a valid token
-		// in the session or in the error if Goth provides it.
-		// However, CompleteAuth handles the full exchange.
-		// If it fails because of FetchUser, we are in a tough spot with Goth.
 		log.Printf("Goth callback error: %v", err)
-
-		// Try to manually handle the code exchange if Goth fails due to user info
-		if provider == "google" && strings.Contains(err.Error(), "401") {
-			code := r.URL.Query().Get("code")
-			if code != "" && s.youtubeService != nil {
-				token, exchangeErr := s.youtubeService.Config.Exchange(r.Context(), code)
-				if exchangeErr == nil {
-					log.Printf("Successfully exchanged code manually after Goth failure")
-					s.handlePostAuthToken(w, r, "google", token)
-					return
-				}
-				log.Printf("Manual exchange also failed: %v", exchangeErr)
-			}
-		}
-
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
+
 	}
 	s.handlePostAuth(w, r, user)
 }
@@ -151,22 +142,18 @@ func (s *Server) handlePostAuthToken(w http.ResponseWriter, r *http.Request, pro
 		s.ytToken = t
 		s.mu.Unlock()
 
-		if s.youtubeService != nil {
-			err := s.youtubeService.SaveToken(s.cfg.YoutubeTokenFile, t)
-			if err != nil {
-				log.Printf("Warning: failed to save YouTube token: %v", err)
-			}
+		err := token.SaveToken(s.cfg.YoutubeTokenFile, t)
+		if err != nil {
+			log.Printf("Warning: failed to save YouTube token: %v", err)
 		}
 	} else if provider == "spotify" {
 		s.mu.Lock()
 		s.spToken = t
 		s.mu.Unlock()
 
-		if s.spotifyService != nil {
-			err := s.spotifyService.SaveToken(s.cfg.SpotifyTokenFile, t)
-			if err != nil {
-				log.Printf("Warning: failed to save Spotify token: %v", err)
-			}
+		err := token.SaveToken(s.cfg.SpotifyTokenFile, t)
+		if err != nil {
+			log.Printf("Warning: failed to save Spotify token: %v", err)
 		}
 	}
 
@@ -181,10 +168,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleYoutubePlaylists(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	token := s.ytToken
+	ytToken := s.ytToken
 	s.mu.RUnlock()
 
-	if token == nil {
+	fmt.Println(ytToken)
+	if ytToken == nil {
 		http.Redirect(w, r, "/auth/google", http.StatusTemporaryRedirect)
 		return
 	}
@@ -194,7 +182,7 @@ func (s *Server) handleYoutubePlaylists(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	items, err := s.youtubeService.GetMyPlayLists(r.Context(), token)
+	items, err := s.youtubeService.GetMyPlayLists(r.Context(), ytToken)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -208,10 +196,10 @@ func (s *Server) handleYoutubePlaylists(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleSpotifyPlaylists(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	token := s.spToken
+	spToken := s.spToken
 	s.mu.RUnlock()
 
-	if token == nil {
+	if spToken == nil {
 		http.Redirect(w, r, "/auth/spotify", http.StatusTemporaryRedirect)
 		return
 	}
@@ -221,7 +209,7 @@ func (s *Server) handleSpotifyPlaylists(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	items, err := s.spotifyService.GetMyPlaylists(r.Context(), token)
+	items, err := s.spotifyService.GetMyPlaylists(r.Context(), spToken)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
