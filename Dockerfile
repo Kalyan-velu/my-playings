@@ -65,7 +65,7 @@ RUN adduser \
     --shell "/sbin/nologin" \
     --no-create-home \
     --uid "${UID}" \
-    appuser \
+    appuser
 
 WORKDIR /data
 RUN chown appuser:appuser /data
