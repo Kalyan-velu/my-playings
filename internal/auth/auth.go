@@ -22,12 +22,15 @@ type Auth struct {
 }
 
 func NewAuth(cfg *config.Config, tokens *tokenstore.TokenStore) *Auth {
-
+	var secureCookie bool
+	if cfg.Environment != "development" {
+		secureCookie = true
+	}
 	store := sessions.NewCookieStore([]byte(cfg.SessionSecret))
 	store.MaxAge(86400 * 30)
 	store.Options.Path = "/"
 	store.Options.HttpOnly = true
-	store.Options.Secure = false
+	store.Options.Secure = secureCookie
 	store.Options.SameSite = http.SameSiteLaxMode
 
 	gothic.Store = store
