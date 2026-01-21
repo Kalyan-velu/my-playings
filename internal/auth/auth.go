@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"my-playings/internal/config"
 	"net/http"
 
@@ -10,7 +9,7 @@ import (
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 	"github.com/markbates/goth/providers/spotify"
-	"google.golang.org/api/oauth2/v2"
+	gc "google.golang.org/api/oauth2/v2"
 	yt "google.golang.org/api/youtube/v3"
 )
 
@@ -34,7 +33,7 @@ func NewAuth(cfg *config.Config) *Auth {
 		cfg.GoogleClientSecret,
 		cfg.BaseURL+"/auth/google/callback",
 		yt.YoutubeReadonlyScope,
-		oauth2.UserinfoEmailScope, oauth2.UserinfoProfileScope,
+		gc.UserinfoEmailScope, gc.UserinfoProfileScope,
 	)
 	googleProvider.SetAccessType("offline")
 	googleProvider.SetPrompt("consent select_account")
@@ -42,7 +41,7 @@ func NewAuth(cfg *config.Config) *Auth {
 		cfg.SpotifyClientID,
 		cfg.SpotifyClientSecret,
 		cfg.BaseURL+"/auth/spotify/callback",
-		"user-read-private", "playlist-read-private",
+		"user-read-private", "user-read-playback-state", "user-read-currently-playing", "playlist-read-private", "playlist-read-collaborative", "user-top-read", "playlist-modify-public", "playlist-modify-private",
 	)
 
 	goth.UseProviders(googleProvider, spotifyProvider)
@@ -50,19 +49,10 @@ func NewAuth(cfg *config.Config) *Auth {
 	return &Auth{Store: store}
 }
 
-func (a *Auth) BeginAuth(w http.ResponseWriter, r *http.Request, provider string) {
-	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
-	gothic.BeginAuthHandler(w, r)
-}
-
-func (a *Auth) CompleteAuth(w http.ResponseWriter, r *http.Request, provider string) (goth.User, error) {
-	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
-	return gothic.CompleteUserAuth(w, r)
-}
-
-func (a *Auth) Logout(w http.ResponseWriter, r *http.Request, provider string) {
-	if provider != "" {
-		r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
+// HandleGothAuth URL should be /auth/{provider}
+func (a *Auth) HandleGothAuth(w http.ResponseWriter, r *http.Request) {
+	if _, err := gothic.CompleteUserAuth(w, r); err != nil {
+		gothic.BeginAuthHandler(w, r)
 	}
-	gothic.Logout(w, r)
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }

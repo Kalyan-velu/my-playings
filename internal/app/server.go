@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/markbates/goth"
+	"github.com/markbates/goth/gothic"
 	"golang.org/x/oauth2"
 )
 
@@ -55,22 +55,18 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) Routes() http.Handler {
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleMain)
-	mux.HandleFunc("/auth/", s.handleGothLogin)
-	mux.HandleFunc("/auth/google/callback", s.handleGothCallback)
-	mux.HandleFunc("/auth/spotify/callback", s.handleGothCallback)
-	mux.HandleFunc("/logout/", s.handleLogout)
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-	})
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/auth/{provider}", s.auth.HandleGothAuth)
+	mux.HandleFunc("/auth/{provider}/callback", s.handleGothCallback)
 
 	mux.HandleFunc("/youtube/playlists", s.handlePlaylists)
 	mux.HandleFunc("/spotify/playlists", s.handleSpotifyPlaylists)
 	return LoggingMiddleware(mux)
 }
 
-func (s *Server) handleMain(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	var html = `<html><body>
 		<p><a href="/auth/google">LogIn with Google (YouTube)</a></p>
 		<p><a href="/auth/spotify">LogIn with Spotify</a></p>
@@ -79,20 +75,6 @@ func (s *Server) handleMain(w http.ResponseWriter, r *http.Request) {
 		<p><a href="/spotify/playlists">View Spotify Playlists</a></p>
 	</body></html>`
 	fmt.Fprint(w, html)
-}
-
-func (s *Server) handleGothLogin(w http.ResponseWriter, r *http.Request) {
-	provider := s.getProvider(r)
-	if provider == "" {
-		http.Error(w, "Provider not specified", http.StatusBadRequest)
-		return
-	}
-
-	if user, err := s.auth.CompleteAuth(w, r, provider); err == nil {
-		s.handlePostAuth(w, r, user)
-	} else {
-		s.auth.BeginAuth(w, r, provider)
-	}
 }
 
 func (s *Server) handleGothCallback(w http.ResponseWriter, r *http.Request) {
@@ -116,12 +98,6 @@ func (s *Server) handleGothCallback(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Successfully authenticated with %s\n", r.PathValue("provider"))
 
 	// Redirect to frontend or success page
-	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-}
-
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	provider := s.getProvider(r)
-	s.auth.Logout(w, r, provider)
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
@@ -150,18 +126,4 @@ func (s *Server) handleSpotifyPlaylists(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(items); err != nil {
 		log.Printf("Error encoding playlists: %v", err)
 	}
-}
-
-func (s *Server) getProvider(r *http.Request) string {
-	provider := strings.TrimPrefix(r.URL.Path, "/auth/")
-	if strings.HasPrefix(r.URL.Path, "/logout/") {
-		provider = strings.TrimPrefix(r.URL.Path, "/logout/")
-	}
-	if strings.Contains(provider, "/") {
-		provider = strings.Split(provider, "/")[0]
-	}
-	if provider == "" {
-		provider = r.URL.Query().Get("provider")
-	}
-	return provider
 }
