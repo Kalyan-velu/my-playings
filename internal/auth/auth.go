@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"fmt"
 	"my-playings/internal/config"
+	tokenstore "my-playings/internal/token"
 	"net/http"
 
 	"github.com/gorilla/sessions"
@@ -9,15 +11,17 @@ import (
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 	"github.com/markbates/goth/providers/spotify"
+	"golang.org/x/oauth2"
 	gc "google.golang.org/api/oauth2/v2"
 	yt "google.golang.org/api/youtube/v3"
 )
 
 type Auth struct {
-	Store *sessions.CookieStore
+	Store  *sessions.CookieStore
+	tokens *tokenstore.TokenStore
 }
 
-func NewAuth(cfg *config.Config) *Auth {
+func NewAuth(cfg *config.Config, tokens *tokenstore.TokenStore) *Auth {
 
 	store := sessions.NewCookieStore([]byte(cfg.SessionSecret))
 	store.MaxAge(86400 * 30)
@@ -46,7 +50,10 @@ func NewAuth(cfg *config.Config) *Auth {
 
 	goth.UseProviders(googleProvider, spotifyProvider)
 
-	return &Auth{Store: store}
+	return &Auth{
+		Store:  store,
+		tokens: tokens,
+	}
 }
 
 // HandleGothAuth URL should be /auth/{provider}
@@ -54,5 +61,26 @@ func (a *Auth) HandleGothAuth(w http.ResponseWriter, r *http.Request) {
 	if _, err := gothic.CompleteUserAuth(w, r); err != nil {
 		gothic.BeginAuthHandler(w, r)
 	}
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+}
+
+func (a *Auth) HandleGothCallback(w http.ResponseWriter, r *http.Request) {
+	gothUser, err := gothic.CompleteUserAuth(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	token := &oauth2.Token{
+		AccessToken:  gothUser.AccessToken,
+		RefreshToken: gothUser.RefreshToken,
+		Expiry:       gothUser.ExpiresAt,
+	}
+
+	if err := a.tokens.SaveToken(r.PathValue("provider"), token); err != nil {
+		http.Error(w, "Failed to save token", http.StatusInternalServerError)
+		return
+	}
+	fmt.Printf("Successfully authenticated with %s\n", r.PathValue("provider"))
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }

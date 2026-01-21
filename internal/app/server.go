@@ -12,9 +12,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/markbates/goth/gothic"
-	"golang.org/x/oauth2"
 )
 
 type ProviderName string
@@ -33,12 +30,11 @@ type Server struct {
 	mu         sync.RWMutex
 }
 
-func NewServer(cfg *config.Config, tokenStore *tokenstore.TokenStore, youtube *youtube.Provider, spotifyProvider *spotify.Provider) *Server {
-	authNew := auth.NewAuth(cfg)
+func NewServer(cfg *config.Config, auth *auth.Auth, tokenStore *tokenstore.TokenStore, youtube *youtube.Provider, spotifyProvider *spotify.Provider) *Server {
 
 	return &Server{
 		cfg:        cfg,
-		auth:       authNew,
+		auth:       auth,
 		tokenStore: tokenStore,
 		youtube:    youtube,
 		spotify:    spotifyProvider,
@@ -59,7 +55,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/auth/{provider}", s.auth.HandleGothAuth)
-	mux.HandleFunc("/auth/{provider}/callback", s.handleGothCallback)
+	mux.HandleFunc("/auth/{provider}/callback", s.auth.HandleGothCallback)
 
 	mux.HandleFunc("/youtube/playlists", s.handlePlaylists)
 	mux.HandleFunc("/spotify/playlists", s.handleSpotifyPlaylists)
@@ -77,30 +73,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprint(w, html)
 }
 
-func (s *Server) handleGothCallback(w http.ResponseWriter, r *http.Request) {
-	gothUser, err := gothic.CompleteUserAuth(w, r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	token := &oauth2.Token{
-		AccessToken:  gothUser.AccessToken,
-		RefreshToken: gothUser.RefreshToken,
-		Expiry:       gothUser.ExpiresAt,
-	}
-
-	if err := s.tokenStore.SaveToken(r.PathValue("provider"), token); err != nil {
-		http.Error(w, "Failed to save token", http.StatusInternalServerError)
-		return
-	}
-
-	fmt.Printf("Successfully authenticated with %s\n", r.PathValue("provider"))
-
-	// Redirect to frontend or success page
-	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-}
-
 func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
 	items, err := s.youtube.GetMyPlayLists(r.Context())
 	if err != nil {
@@ -112,7 +84,6 @@ func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(items); err != nil {
 		log.Printf("Error encoding playlists: %v", err)
 	}
-
 }
 
 func (s *Server) handleSpotifyPlaylists(w http.ResponseWriter, r *http.Request) {

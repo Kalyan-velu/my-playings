@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"my-playings/internal/app"
+	authservice "my-playings/internal/auth"
 	"my-playings/internal/config"
 	"my-playings/internal/provider/spotify"
 	"my-playings/internal/provider/youtube"
@@ -18,11 +19,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	auth := authservice.NewAuth(cfg, tokens)
 
 	yt := youtube.NewYoutubeProvider(cfg, tokens)
 	spotifyProvider := spotify.NewSpotifyProvider(cfg, tokens)
 
-	server := app.NewServer(cfg, tokens, yt, spotifyProvider)
+	server := app.NewServer(cfg, auth, tokens, yt, spotifyProvider)
 
 	fmt.Printf("Server started at %s\n", cfg.Port)
 	err = http.ListenAndServe(":"+cfg.Port, server.Routes())
