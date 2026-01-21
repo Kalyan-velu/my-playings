@@ -10,7 +10,7 @@ client_secret*
 .env
 # Output of the go coverage tool
 *.out
-
+token*
 # Air temporary directory and build logs
 tmp/
 build-errors.log
