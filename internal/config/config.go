@@ -19,6 +19,7 @@ type Config struct {
 	GoogleClientID     string `env:"GOOGLE_CLIENT_ID,required"`
 	GoogleClientSecret string `env:"GOOGLE_CLIENT_SECRET,required"`
 	YoutubeTokenFile   string `env:"YOUTUBE_TOKEN_FILE" envDefault:"token_youtube.json"`
+	EncryptionKey      string `env:"ENCRYPTION_KEY,required"`
 }
 
 func Load() *Config {
