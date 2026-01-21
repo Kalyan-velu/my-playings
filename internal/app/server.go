@@ -8,9 +8,8 @@ import (
 	"my-playings/internal/config"
 	"my-playings/internal/provider/spotify"
 	"my-playings/internal/provider/youtube"
-	"my-playings/internal/token"
+	tokenstore "my-playings/internal/token"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -18,47 +17,39 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type ProviderName string
+
+const (
+	ProviderYoutube ProviderName = "google"
+	ProviderSpotify ProviderName = "spotify"
+)
+
 type Server struct {
-	cfg            *config.Config
-	auth           *auth.Auth
-	youtubeService *youtube.Service
-	spotifyService *spotify.Service
-	ytToken        *oauth2.Token
-	spToken        *oauth2.Token
-	mu             sync.RWMutex
+	cfg        *config.Config
+	auth       *auth.Auth
+	youtube    *youtube.Provider
+	spotify    *spotify.Provider
+	tokenStore *tokenstore.TokenStore
+	mu         sync.RWMutex
 }
 
-func NewServer(cfg *config.Config, auth *auth.Auth, yt *youtube.Service, sp *spotify.Service) *Server {
-	ytToken, err := token.LoadToken(cfg.YoutubeTokenFile)
-	if err != nil {
-		log.Printf("No existing YouTube token found or failed to load: %v", err)
-	}
-
-	spToken, err := token.LoadToken(cfg.SpotifyTokenFile)
-	if err != nil {
-		log.Printf("No existing Spotify token found or failed to load: %v", err)
-	}
+func NewServer(cfg *config.Config, tokenStore *tokenstore.TokenStore, youtube *youtube.Provider, spotifyProvider *spotify.Provider) *Server {
+	authNew := auth.NewAuth(cfg)
 
 	return &Server{
-		cfg:            cfg,
-		auth:           auth,
-		youtubeService: yt,
-		spotifyService: sp,
-		ytToken:        ytToken,
-		spToken:        spToken,
+		cfg:        cfg,
+		auth:       authNew,
+		tokenStore: tokenStore,
+		youtube:    youtube,
+		spotify:    spotifyProvider,
 	}
 }
 
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-
-		// before
 		log.Println("→", r.Method, r.URL.Path)
-
-		next.ServeHTTP(w, r) // pass control forward
-
-		// after
+		next.ServeHTTP(w, r)
 		log.Println("←", time.Since(start))
 	})
 }
@@ -74,9 +65,8 @@ func (s *Server) Routes() http.Handler {
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 	})
 
-	mux.HandleFunc("/youtube/playlists", s.handleYoutubePlaylists)
+	mux.HandleFunc("/youtube/playlists", s.handlePlaylists)
 	mux.HandleFunc("/spotify/playlists", s.handleSpotifyPlaylists)
-
 	return LoggingMiddleware(mux)
 }
 
@@ -166,23 +156,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
-func (s *Server) handleYoutubePlaylists(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	ytToken := s.ytToken
-	s.mu.RUnlock()
-
-	fmt.Println(ytToken)
-	if ytToken == nil {
-		http.Redirect(w, r, "/auth/google", http.StatusTemporaryRedirect)
-		return
-	}
-
-	if s.youtubeService == nil {
-		http.Error(w, "YouTube service not available", http.StatusInternalServerError)
-		return
-	}
-
-	items, err := s.youtubeService.GetMyPlayLists(r.Context(), ytToken)
+func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
+	items, err := s.youtube.GetMyPlayLists(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -192,24 +167,11 @@ func (s *Server) handleYoutubePlaylists(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewEncoder(w).Encode(items); err != nil {
 		log.Printf("Error encoding playlists: %v", err)
 	}
+
 }
 
 func (s *Server) handleSpotifyPlaylists(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	spToken := s.spToken
-	s.mu.RUnlock()
-
-	if spToken == nil {
-		http.Redirect(w, r, "/auth/spotify", http.StatusTemporaryRedirect)
-		return
-	}
-
-	if s.spotifyService == nil {
-		http.Error(w, "Spotify service not available", http.StatusInternalServerError)
-		return
-	}
-
-	items, err := s.spotifyService.GetMyPlaylists(r.Context(), spToken)
+	items, err := s.spotify.GetMyPlaylists(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
