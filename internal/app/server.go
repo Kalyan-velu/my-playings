@@ -96,57 +96,26 @@ func (s *Server) handleGothLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGothCallback(w http.ResponseWriter, r *http.Request) {
-	provider := s.getProvider(r)
-	if provider == "" {
-		// Fallback for callback paths
-		provider = "google"
-		if strings.Contains(r.URL.Path, "spotify") {
-			provider = "spotify"
-		}
-	}
-
-	user, err := s.auth.CompleteAuth(w, r, provider)
+	gothUser, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
-		log.Printf("Goth callback error: %v", err)
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-
-	}
-	s.handlePostAuth(w, r, user)
-}
-
-func (s *Server) handlePostAuth(w http.ResponseWriter, r *http.Request, user goth.User) {
-	t := &oauth2.Token{
-		AccessToken:  user.AccessToken,
-		RefreshToken: user.RefreshToken,
-		Expiry:       user.ExpiresAt,
-		TokenType:    "Bearer",
 	}
 
-	s.handlePostAuthToken(w, r, user.Provider, t)
-}
-
-func (s *Server) handlePostAuthToken(w http.ResponseWriter, r *http.Request, provider string, t *oauth2.Token) {
-	if provider == "google" {
-		s.mu.Lock()
-		s.ytToken = t
-		s.mu.Unlock()
-
-		err := token.SaveToken(s.cfg.YoutubeTokenFile, t)
-		if err != nil {
-			log.Printf("Warning: failed to save YouTube token: %v", err)
-		}
-	} else if provider == "spotify" {
-		s.mu.Lock()
-		s.spToken = t
-		s.mu.Unlock()
-
-		err := token.SaveToken(s.cfg.SpotifyTokenFile, t)
-		if err != nil {
-			log.Printf("Warning: failed to save Spotify token: %v", err)
-		}
+	token := &oauth2.Token{
+		AccessToken:  gothUser.AccessToken,
+		RefreshToken: gothUser.RefreshToken,
+		Expiry:       gothUser.ExpiresAt,
 	}
 
+	if err := s.tokenStore.SaveToken(r.PathValue("provider"), token); err != nil {
+		http.Error(w, "Failed to save token", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Printf("Successfully authenticated with %s\n", r.PathValue("provider"))
+
+	// Redirect to frontend or success page
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
